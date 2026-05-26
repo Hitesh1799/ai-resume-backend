@@ -8,6 +8,31 @@ const ai = new GoogleGenAI({
     apiKey: process.env.GOOGLE_GENAI_API_KEY
 })
 
+const PRIMARY_MODEL = "gemini-2.5-flash"
+const FALLBACK_MODEL = "gemini-2.0-flash"
+
+async function generateContentWithRetry(params, retries = 3) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            return await ai.models.generateContent(params)
+        } catch (err) {
+            const is503 = err?.status === 503 || err?.message?.includes("503") || err?.message?.includes("UNAVAILABLE")
+            const isLastAttempt = attempt === retries
+
+            if (is503 && !isLastAttempt) {
+                await new Promise(res => setTimeout(res, 1000 * attempt))
+                continue
+            }
+
+            if (is503 && params.model === PRIMARY_MODEL) {
+                return await ai.models.generateContent({ ...params, model: FALLBACK_MODEL })
+            }
+
+            throw err
+        }
+    }
+}
+
 
 const interviewReportSchema = z.object({
     matchScore: z.number().describe("A score between 0 and 100 indicating how well the candidate's profile matches the job describe"),
@@ -39,8 +64,8 @@ async function generateInterviewReport({ resume, selfDescription, jobDescription
                         Self Description: ${selfDescription}
                         Job Description: ${jobDescription}
 `
-    const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+    const response = await generateContentWithRetry({
+        model: PRIMARY_MODEL,
         contents: prompt,
         config: {
             responseMimeType: "application/json",
@@ -94,8 +119,8 @@ async function generateResumePdf({ resume, selfDescription, jobDescription }) {
                         The resume should not be so lengthy, it should ideally be 1-2 pages long when converted to PDF. Focus on quality rather than quantity and make sure to include all the relevant information that can increase the candidate's chances of getting an interview call for the given job description.
                     `
 
-    const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+    const response = await generateContentWithRetry({
+        model: PRIMARY_MODEL,
         contents: prompt,
         config: {
             responseMimeType: "application/json",
